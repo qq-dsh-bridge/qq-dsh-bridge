@@ -1,0 +1,22 @@
+# qq-dsh-bridge 的忽略规则
+
+.tmp/
+logs/
+mcp-dps/
+mcp-latex/
+mcp-shared/
+mcp-websearch/
+plugins/
+
+
+roles/*
+!roles/example.md
+
+
+scripts/
+state/
+prompts/
+
+config.json
+config.sessions.json
+start.bat

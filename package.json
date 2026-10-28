@@ -1,0 +1,21 @@
+{
+  "name": "qq-dsh-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Bridge between SnowLuma (OneBot v11 / QQ) and DeepSeek Harness: QQ messages become DSH agent prompts, agent replies go back to QQ. Zero runtime dependencies.",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "main": "src/main.js",
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node scripts/test-normalize.mjs && node scripts/test-recall.mjs && node scripts/test-sessions.mjs && node scripts/test-content.mjs",
+    "test:normalize": "node scripts/test-normalize.mjs",
+    "test:recall": "node scripts/test-recall.mjs",
+    "test:sessions": "node scripts/test-sessions.mjs",
+    "test:content": "node scripts/test-content.mjs",
+    "check": "node src/main.js --check"
+  }
+}

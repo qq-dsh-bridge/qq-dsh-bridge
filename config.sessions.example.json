@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sessions": {
+    "group:1234567890": {
+      "role": {
+        "current": "example"
+      },
+      "chatlog": {
+        "triggerWho": "owner",
+        "windowWho": "owner"
+      }
+    },
+    "private:987654321": {
+      "role": {
+        "current": "example"
+      }
+    }
+  }
+}

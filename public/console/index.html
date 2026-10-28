@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>qq-dsh-bridge 控制台</title>
+<link rel="icon" href="/favicon.svg">
+<link rel="stylesheet" href="/console.css">
+<script>
+
+(function () {
+  try {
+    var t = localStorage.getItem('qqbridge-theme') || 'auto';
+    var dark = t === 'dark'
+      || (t === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    var root = document.documentElement;
+    root.setAttribute('data-theme', t);
+    root.classList.toggle('dark', dark);
+    root.style.colorScheme = dark ? 'dark' : 'light';
+  } catch (e) { /* 读不到 localStorage 就按默认亮色 */ }
+})();
+</script>
+</head>
+<body>
+
+<!--
+  首屏骨架。
+
+  为什么需要它：`GET /api/session` 回来之前，前端不知道"该显示登录页还是主界面"。
+  早先的做法是先渲染主界面再纠正，于是没设密码的用户会看到登录页闪一下。
+-->
+<div class="boot" id="boot">
+  <span class="spinner" aria-hidden="true"></span>
+  <span>正在连接控制台…</span>
+</div>
+
+<!-- ═══════════════════════════════════ 登录页 ═══════════════════════════════════ -->
+<section class="login" id="login" hidden>
+  <!--
+    动态背景：三条 SVG 波浪 + CSS 平移。刻意不用 canvas/WebGL —— 这是个
+    运维面板，登录页不该吃掉一台老笔记本的 CPU。可在右下角关掉（按设备记忆）。
+  -->
+  <div class="waves" id="waves" aria-hidden="true">
+    <svg viewBox="0 0 1440 720" preserveAspectRatio="none">
+      <path class="wave wave-3" d="M0,470 C240,410 480,530 720,470 C960,410 1200,530 1440,470 L1440,720 L0,720 Z"/>
+      <path class="wave wave-2" d="M0,530 C260,470 500,590 760,530 C1020,470 1220,580 1440,530 L1440,720 L0,720 Z"/>
+      <path class="wave wave-1" d="M0,600 C280,540 520,660 780,600 C1040,540 1240,650 1440,600 L1440,720 L0,720 Z"/>
+    </svg>
+  </div>
+  <div class="login-glow" aria-hidden="true"></div>
+
+  <button class="btn ghost theme-fab" id="login-theme" type="button" title="切换主题：自动 / 亮 / 暗">自动</button>
+
+  <form class="login-card" id="login-form" novalidate>
+    <div class="login-brand">
+      <span class="brand-mark lg" aria-hidden="true"></span>
+      <div class="login-brand-text">
+        <strong>qq-dsh-bridge</strong>
+        <small>QQ ↔ DeepSeek Harness · 控制台</small>
+      </div>
+    </div>
+
+    <label class="login-field">
+      <svg class="login-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 20 3m-3 0h3v3"/>
+      </svg>
+      <input class="login-input" id="login-password" type="password" name="password"
+             autocomplete="current-password" placeholder="输入控制台密码" autofocus>
+      <button class="login-reveal" id="login-reveal" type="button" aria-label="显示密码" tabindex="-1">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
+    </label>
+
+    <p class="login-error" id="login-error" hidden></p>
+
+    <button class="btn primary block" id="login-submit" type="submit">
+      进入控制台
+      <svg class="btn-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+    </button>
+
+    <p class="login-foot">
+      密码写在 <span class="mono">config.json</span> 的 <span class="mono">console.password</span>
+    </p>
+  </form>
+
+  <button class="fx-toggle" id="login-fx" type="button" aria-pressed="true">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
+    动态背景
+  </button>
+</section>
+
+<!-- ═══════════════════════════════════ 主界面 ═══════════════════════════════════ -->
+<div class="app" id="app" hidden>
+
+  <!-- 窄屏抽屉的遮罩（点它关侧栏） -->
+  <div class="scrim" id="scrim" hidden></div>
+
+  <!-- ───────────────────────────── 侧栏 -->
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-text">
+        <strong>qq-dsh-bridge</strong>
+        <small>控制台</small>
+      </span>
+    </div>
+
+    <!--
+      加一个页面 = 这里加一个 button + 下面加一个 section[data-page-view] + console.js 的 PAGES 里加一条。
+      data-page 的值必须与 PAGES 的键、data-page-view 的值一致。
+    -->
+    <nav class="nav" id="nav">
+      <button class="nav-item" data-page="status" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3 7 4-14 3 7h4"/></svg>
+        <span>状态</span>
+      </button>
+      <button class="nav-item" data-page="role" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+        <span>人格</span>
+      </button>
+      <button class="nav-item" data-page="sessions" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h18M3 12h18M3 17h10"/><circle cx="18" cy="17" r="3"/></svg>
+        <span>会话</span>
+      </button>
+      <button class="nav-item" data-page="config" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></svg>
+        <span>配置</span>
+      </button>
+      <button class="nav-item" data-page="logs" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h9l5 5v13H5z"/><path d="M14 3v5h5M8 13h8M8 17h5"/></svg>
+        <span>日志</span>
+      </button>
+    </nav>
+
+    <div class="side-foot" id="side-foot"></div>
+  </aside>
+
+  <!-- ───────────────────────────── 主区 -->
+  <main class="main">
+    <header class="topbar">
+      <button class="btn ghost icon-only narrow-only" id="btn-menu" type="button" aria-label="打开侧栏">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+      <h1 id="page-title">状态</h1>
+      <span class="badge" id="status-badge">连接中…</span>
+      <span class="grow"></span>
+      <button class="btn ghost" id="btn-theme" type="button" title="切换主题：自动 / 亮 / 暗">自动</button>
+      <button class="btn ghost" id="btn-logout" type="button" title="退出登录" hidden>登出</button>
+      <button class="btn" id="btn-refresh" type="button">刷新</button>
+    </header>
+
+    <!-- 提示条（成功/失败/提醒），由 console.js 填 -->
+    <div class="messages" id="messages"></div>
+
+    <!-- ─────────── 页：状态 ─────────── -->
+    <section class="page" data-page-view="status">
+      <div class="card">
+        <div class="card-head">
+          <h2>会话状态</h2>
+          <span class="muted small" id="conv-hint"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>会话</th><th>状态</th><th>投递</th><th>叫醒</th>
+                <th>跳过（未触发 / 闸门）</th><th>静默回睡</th>
+              </tr>
+            </thead>
+            <tbody id="conv-rows">
+              <tr><td colspan="6" class="empty">（还没有会话）</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>生效配置摘要</h2></div>
+        <table class="kv"><tbody id="eff-rows"></tbody></table>
+        <p class="card-foot">
+          优先级：<span class="mono">内置默认值 &lt; config.json &lt; 环境变量 &lt; 命令行</span>
+        </p>
+      </div>
+    </section>
+
+    <!-- ─────────── 页：人格 ─────────── -->
+    <section class="page" data-page-view="role" hidden>
+      <div class="card">
+        <div class="card-head">
+          <h2>当前人格</h2>
+          <span class="grow"></span>
+          <span class="mono" id="role-current">（未启用）</span>
+          <button class="btn danger ghost" id="btn-role-clear" type="button">清除</button>
+        </div>
+        <p class="card-foot">
+          清除后只按仿真提示词行动（人设不再注入）。<strong>没有撤销</strong>，但角色卡文件仍在。
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>角色卡</h2></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>角色</th><th>注入字符</th><th>状态</th><th class="right">操作</th></tr></thead>
+            <tbody id="role-rows">
+              <tr><td colspan="4" class="empty">（加载中…）</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="card-foot row">
+          <input class="input" id="new-role-name" type="text" placeholder="新角色名（中文，简短）">
+          <button class="btn" id="btn-role-create" type="button">新建</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>编辑</h2>
+          <span class="grow"></span>
+          <span class="muted mono" id="role-editing">（从上面点「编辑」选一个）</span>
+        </div>
+        <div class="card-body">
+          <textarea class="input mono-area" id="role-text" spellcheck="false"
+            placeholder="点上面某张卡的「编辑」把它的内容载进来"></textarea>
+          <p class="hint">
+            只写<strong>人设</strong>（你是谁 / 说话风格 / 性格反应 / 梗 / 回复示例），不要写工具用法。
+          </p>
+          <div class="row">
+            <button class="btn primary" id="btn-role-save" type="button">保存</button>
+            <button class="btn" id="btn-role-preview" type="button">预览实际注入内容</button>
+            <span class="grow"></span>
+            <span class="muted small" id="role-stat"></span>
+          </div>
+          <details class="preview" id="role-preview-box" hidden>
+            <summary>实际注入内容（就是发给模型的那些字）</summary>
+            <pre class="log" id="role-preview"></pre>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─────────── 页：会话配置 ─────────── -->
+    <section class="page" data-page-view="sessions" hidden>
+      <div class="card">
+        <div class="card-head">
+          <h2>按会话配置</h2>
+          <span class="grow"></span>
+          <span class="muted small" id="sess-file"></span>
+        </div>
+        <p class="card-foot">
+          只覆盖 <span class="mono">role</span> / <span class="mono">chatlog</span> /
+          <span class="mono">decide</span> 三组里的白名单字段；没覆盖的项继承
+          <span class="mono">config.json</span>。落盘在
+          <span class="mono">config.sessions.json</span>，保存后立即生效（热重载）。
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>会话</th><th>角色</th><th>覆盖字段</th><th class="right">操作</th></tr></thead>
+            <tbody id="sess-rows"><tr><td colspan="4" class="empty">（加载中…）</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>编辑</h2>
+          <span class="grow"></span>
+          <span class="muted mono" id="sess-editing">（从上面点「编辑」，或用下面加载一个键）</span>
+        </div>
+        <div class="card-body">
+          <div class="row">
+            <select class="input mono" id="sess-pick"></select>
+            <button class="btn" id="btn-sess-load" type="button">载入</button>
+          </div>
+          <div class="row" id="sess-custom-row" hidden>
+            <input class="input mono" id="sess-key" type="text"
+              placeholder="group:1234567890 / private:123456789 / *">
+          </div>
+          <p class="hint">
+            下拉里的会话来自 <span class="mono">config.json</span> 的
+            <span class="mono">allow.groups</span> / <span class="mono">allow.private</span> ——
+            不用手打会话键。列表里没有的（比如刚拉进群、还没加白名单）选「自定义」自己填。
+          </p>
+          <p class="hint">
+            每个字段留空 = <strong>继承</strong>（不写入覆盖层）。
+            <span class="mono">*</span> 是全站兜底，优先级低于精确会话键。
+          </p>
+          <div id="sess-form" class="sess-form"></div>
+          <div class="row">
+            <button class="btn primary" id="btn-sess-save" type="button">保存</button>
+            <button class="btn danger ghost" id="btn-sess-clear" type="button">恢复默认</button>
+            <span class="grow"></span>
+            <span class="muted small" id="sess-stat"></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─────────── 页：配置 ─────────── -->
+    <section class="page" data-page-view="config" hidden>
+      <div class="card">
+        <div class="card-head">
+          <h2>常用项</h2>
+          <span class="grow"></span>
+          <span class="badge warn" id="cfg-dirty" hidden>有未保存修改</span>
+        </div>
+        <div class="card-body grid2">
+          <label class="field">
+            <span>触发条件（谁的话能叫醒它）</span>
+            <select class="input" id="cfg-triggerWho"><option value="owner">只有主人</option><option value="everyone">所有人</option></select>
+          </label>
+          <label class="field">
+            <span>上下文窗口（收谁的话）</span>
+            <select class="input" id="cfg-windowWho"><option value="owner">只有主人</option><option value="everyone">所有人</option></select>
+          </label>
+          <label class="field">
+            <span>唤醒时最多带几条</span>
+            <input class="input" id="cfg-wakeLimit" type="number" min="1">
+          </label>
+          <label class="field">
+            <span>回复时最多带几条</span>
+            <input class="input" id="cfg-replyLimit" type="number" min="1">
+          </label>
+          <label class="field">
+            <span>单条消息上限（字符）</span>
+            <input class="input" id="cfg-maxChars" type="number" min="200">
+          </label>
+          <label class="field">
+            <span>取未读时最多回溯几天</span>
+            <input class="input" id="cfg-maxDays" type="number" min="1">
+          </label>
+          <label class="field">
+            <span>多久没动静就回睡眠（毫秒）</span>
+            <input class="input" id="cfg-idleMs" type="number" min="1000" step="1000">
+          </label>
+          <label class="field">
+            <span>日志级别</span>
+            <select class="input" id="cfg-logLevel">
+              <option value="debug">debug</option><option value="info">info</option>
+              <option value="warn">warn</option><option value="error">error</option>
+            </select>
+          </label>
+        </div>
+        <p class="card-foot">
+          改上面任一项会同步进下面的 JSON。<strong>真正提交的只有 JSON 文本域</strong>。
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>完整配置</h2>
+          <span class="grow"></span>
+          <button class="btn" id="btn-check" type="button">只校验</button>
+          <button class="btn" id="btn-reset" type="button">从磁盘重新载入</button>
+          <button class="btn primary" id="btn-save" type="button">校验并保存</button>
+        </div>
+        <div class="card-body">
+          <textarea class="input mono-area tall" id="cfg-json" spellcheck="false"></textarea>
+          <p class="hint">
+            保存时服务端只写<strong>改过的键</strong>（不会把 SnowLuma 发现出来的 wsToken 之类洗掉），
+            校验不过就一个字节都不写；写的是原子替换（临时文件 + rename），中途被杀也不会留下半截 JSON。
+            改 <span class="mono">console.password</span> 保存后，所有已登录的会话立即失效（需要用新密码重新登录）。
+          </p>
+          <p class="hint">
+            密码在这一栏里显示为占位符 <span class="mono">&lt;已设置&gt;</span>：
+            <strong>原样留着 = 不改</strong>（服务端会还原成真值）；想换密码就把这一项改成新密码。
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─────────── 页：日志 ─────────── -->
+    <section class="page" data-page-view="logs" hidden>
+      <div class="card">
+        <div class="card-head">
+          <h2>桥接日志</h2>
+          <span class="muted small" id="log-hint">尾部 200 行</span>
+          <span class="grow"></span>
+          <select class="input compact" id="log-level">
+            <option value="all">全部级别</option>
+            <option value="info">info 及以上</option>
+            <option value="warn">warn 及以上</option>
+            <option value="error">只看 error</option>
+          </select>
+          <label class="check"><input type="checkbox" id="log-autoscroll" checked> 自动滚到底</label>
+          <button class="btn" id="btn-log-refresh" type="button">刷新</button>
+        </div>
+        <pre class="log tall" id="log-view">（加载中…）</pre>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script type="module" src="/console.js"></script>
+</body>
+</html>

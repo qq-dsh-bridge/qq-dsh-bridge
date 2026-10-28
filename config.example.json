@@ -1,0 +1,73 @@
+{
+  "dsh": {
+    "hostUrl": "http://127.0.0.1:3130",
+    "hostTokenFile": "state/host-token"
+  },
+  "snowluma": {
+    "homeDir": "C:\\path\\to\\SnowLuma",
+    "selfQq": "123456789",
+    "heartbeatMs": 45000,
+    "heartbeatTimeoutMs": 12000,
+    "connectTimeoutMs": 20000
+  },
+  "owner": {
+    "qq": "987654321"
+  },
+  "role": {
+    "current": "example"
+  },
+  "allow": {
+    "private": [
+      987654321
+    ],
+    "groups": [
+      1234567890
+    ]
+  },
+  "console": {
+    "port": 3111,
+    "host": "0.0.0.0",
+    "password": ""
+  },
+  "chatlog": {
+    "root": "C:\\path\\to\\workspaces",
+    "agentRoot": "/ws",
+    "wakeLimit": 60,
+    "replyLimit": 20,
+    "maxDays": 7,
+    "maxChars": 4000,
+    "roleMaxChars": 12000,
+    "triggerWho": "everyone",
+    "windowWho": "everyone",
+    "waitDefaultMs": 300000,
+    "idleMs": 300000
+  },
+  "media": {
+    "root": "C:\\path\\to\\workspaces\\media",
+    "agentRoot": "/ws/media",
+    "totalMb": 500
+  },
+  "log": {
+    "level": "info",
+    "file": "logs/bridge.log"
+  },
+  "decide": {
+    "mode": "enforce",
+    "model": "deepseek-chat",
+    "apiBase": "http://127.0.0.1:7863/v1",
+    "apiKeyFile": "C:\\path\\to\\home\\.credentials.yaml",
+    "apiKeyRef": "DECIDE_API_KEY",
+    "timeoutMs": 6000,
+    "maxTokens": 900,
+    "maxRecentLines": 8,
+    "thinking": "off",
+    "cardSections": [
+      "## 一、",
+      "## 二、",
+      "## 三、"
+    ],
+    "cardMaxChars": 3000,
+    "capabilities": "统计群聊消息、翻聊天记录、讲事实",
+    "ownerAlways": true
+  }
+}
