@@ -15,6 +15,44 @@ QQ（OneBot v11 / SnowLuma）与 DeepSeek 之间的桥接：群消息变成 DSH 
 
 端口占用：桥接 API `3110`、控制台 `3111`；SnowLuma `3000` / `3001`；DSH 宿主 `3130`。
 
+## 与 qq-dsh 对接（DSH 侧）
+
+DSH 那边装的是 `qq-dsh` 插件包。它只需要一个 **`bridgeRoot`**，其余路径都从它推导出来 —— 所以**两边必须指向同一个目录**，否则就是 401、或者"提示词读到了空段"。
+
+```yaml
+# profile 的 cordis.patch.yml：三个条目共用一个 bridgeRoot
+- id: qq-prompt-sections
+  name: qq-dsh/prompt-sections
+  config: &qqBridge
+    bridgeRoot: '<本仓库路径>'
+
+- id: qq-dsh-host
+  name: qq-dsh/host
+  config: *qqBridge
+
+- id: qq-dsh-tools
+  name: qq-dsh/tools
+  config: *qqBridge
+```
+
+两边成对的值（左边是 `config.json` 里的项，右边是 qq-dsh 的配置键）：
+
+| 事实 | 本仓库侧 | qq-dsh 侧 |
+|---|---|---|
+| 桥接目录 | 仓库根 | `bridgeRoot`（必填；也可用环境变量 `QQ_DSH_BRIDGE_HOME`） |
+| 宿主令牌 | `dsh.hostTokenFile`，默认 `state/host-token` | `tokenFile`，默认 `<bridgeRoot>/state/host-token` |
+| 宿主监听 | `dsh.hostUrl`，默认 `http://127.0.0.1:3130` | `host` / `port`，默认 `127.0.0.1:3130`（只允许回环） |
+| 桥接 API | `api.port`，默认 `3110` | `bridgeUrl`，默认 `http://127.0.0.1:3110`（只允许回环） |
+| 提示词 | `prompts/*.md` | `dir`，默认 `<bridgeRoot>/prompts` |
+| 人格卡 | `roles/*.md` | `rolesDir`，默认 `<bridgeRoot>/roles` |
+| 会话映射 | `state/sessions.json` | `sessionsFile`，默认 `<bridgeRoot>/state/sessions.json` |
+| 桥接配置 | `config.json` | `bridgeConfigFile`，默认 `<bridgeRoot>/config.json` |
+| Agent preset | `dsh.agentPreset`，必须是 `qq` | DSH 里要有同名 preset |
+
+令牌两边必须**完全一致**。改过任一侧之后，跑一次 `node scripts/make-host-token.mjs`（不带参数）比对指纹即可，不用把令牌打印出来。
+
+插件自己的配置键清单只有一份（`src/shared/config.js` 的 `CONFIG_KEYS`），启动日志会打出每个值来自 `config` / `derived` / `default` 哪一层 —— 详细说明见 qq-dsh 仓库的 README。
+
 ## 安装
 
 1. **装 Node 22+**
