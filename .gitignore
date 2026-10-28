@@ -12,10 +12,10 @@ plugins/
 roles/*
 !roles/example.md
 
-
+prompts/zh/
 scripts/
 state/
-prompts/
+
 
 config.json
 config.sessions.json
