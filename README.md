@@ -8,7 +8,7 @@ QQ（OneBot v11 / SnowLuma）与 DeepSeek 之间的桥接：群消息变成 DSH 
 |---|---|---|---|
 | **Node.js** | `>= 22.13.0`（见 `engines`） | 运行桥接。**零 npm 运行时依赖**，不需要 `npm install` | ✅ |
 | **SnowLuma**（OneBot v11 实现） | 需开启 HTTP 动作端（默认 `:3000`）与正向 WebSocket（默认 `:3001`） | QQ 侧的收发 | ✅ |
-| **DeepSeekWeb（DSH）** 桌面端 | 装了 **qq-dsh** 插件（另一个仓库 `ChengChe-yi/qq-dsh`），宿主端默认监听 `:3130` | agent 侧：建会话、投递提示词、收事件流 | ✅ |
+| **DeepSeekWeb（DSH）** 桌面端 | 装了 **qq-dsh** 插件（另一个仓库 `qq-dsh-bridge/qq-dsh`），宿主端默认监听 `:3130` | agent 侧：建会话、投递提示词、收事件流 | ✅ |
 | **Agent preset `qq`** | DSH 里必须有同名 preset | 建会话时用它。**安全关键**：preset 缺失会回落到默认 preset（含 bash / 文件读写 / 子 agent），而 QQ 会话是暴露给群友的 | ✅ |
 | **sharp** | 可选 | 把过大的图片压到 DSH 能接受的 base64 线以下。桥接会自己找 DSH 自带的那份；找不到只是"大图退回原样"，不会报错。可用 `QQ_SHARP_URL` 指定 | ⬜ |
 | **mcp-latex / mcp-md / mcp-websearch** | 可选，不在本仓库 | 图片转短链、联网搜索等工具能力 | ⬜ |
