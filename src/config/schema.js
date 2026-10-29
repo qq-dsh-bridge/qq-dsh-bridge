@@ -21,20 +21,15 @@
 //    （re-export 在文件末尾、原来那两个函数的位置。）
 import { isPlainObject } from '../util/value.js';
 
-// 配置版本。改变不兼容的配置形状时递增，用于迁移。
-export const CONFIG_VERSION = 1;
-
 // 会话覆盖层的版本（`config.sessions.json` 的 `version`）。
 //
-// 与 CONFIG_VERSION 分开：两者演进节奏不同 —— 主配置加字段不需要升覆盖层版本
-// （覆盖层是补丁，字段是白名单式的，新增可覆盖项对老文件无害）。
+// 两者演进节奏不同：主配置加字段不需要升覆盖层版本
+// （覆盖层是补丁、字段白名单式，新增可覆盖项对老文件无害）。
 export const SESSIONS_VERSION = 1;
 
 // 默认配置。**这是唯一的默认值来源**——schema 只负责类型，不再重复写默认值。
 export function defaultConfig() {
   return {
-    configVersion: CONFIG_VERSION,
-
     dsh: {
       // 插件侧传输（qq-dsh-host）：会话/投递/事件/归档都走它。
       // 监听哪个端口由 dsh 的 cordis.patch.yml 决定，这里只是桥接要连的地址。
@@ -84,19 +79,6 @@ export function defaultConfig() {
       // 拿它去 `config/onebot_<QQ号>.json` 里挑文件，并在连接后核对实际登录号
       // （不一致直接退出，见 app/identity.js）。
       selfQq: '',
-      // 是否要求 SnowLuma 推送"本号发出的消息"。
-      //
-      // *必须是 true**，否则会有两个后果（实测确认）：
-      //
-      //  1. 收不到 Yunzai（另一个 bot）的发言 —— 它与 DSH agent **共用同一个
-      //     QQ 号**，从 OneBot 事件看无法区分。收不到就不知道它抢答了什么，
-      //     两个 bot 会互相打架、重复回答。
-      //  2. 上下文窗口里出现"有人 @ 我 → 直接跳到我说的话"的断层。
-      //
-      // 对应 SnowLuma 侧 `networks.{httpServers,wsServers}[].reportSelfMessage`，
-      // 需要**在 SnowLuma 自己的配置里**改成 true 并重启它（本项只是记录预期，
-      // 桥接无法远程改它的配置）。
-      expectSelfMessages: true,
       // 主动探测间隔。**必须是主动探针**：SnowLuma 对掉线期间的消息不重放，
       // 且 TCP 半开时两端都不会报错、不触发 onclose（旧方案实测过三次）。
       heartbeatMs: 45_000,
@@ -341,7 +323,6 @@ export class ConfigError extends Error {
 
 // 各配置项的期望类型。`null` 表示"任意"。
 const SCHEMA = {
-  configVersion: 'number',
   dsh: {
     hostUrl: 'string',
     hostTokenFile: 'string',
@@ -355,7 +336,6 @@ const SCHEMA = {
     wsToken: 'string',
     homeDir: 'string',
     selfQq: 'qqString',
-    expectSelfMessages: 'boolean',
     heartbeatMs: 'positiveInt',
     heartbeatTimeoutMs: 'positiveInt',
     connectTimeoutMs: 'positiveInt',
@@ -789,3 +769,121 @@ export function validateSessionOverrides(doc) {
   return { ok: errors.length === 0, errors };
 }
 
+
+// ══════════════════════════════════════════════════════════════════════════
+// 配置项 → 生效方式
+//
+// 每加一个配置键，**必须**在这里登记一行，否则 `--check` 会报 missing。
+// 这是为了让"改了没反应"变成启动前就能看见的问题：
+//
+//   live     改完立即生效（消费者每次现取，或 applyLiveConfig 会推给组件）
+//   restart  只有重启才生效（被构造时快照进组件 —— 见 app/live-config.js 的清单）
+//   none     **现在没有任何消费者**：要么去实现，要么把键删掉，别留着当假旋钮
+//            （当前为空 —— 2026-10-29 清掉了 configVersion / snowluma.expectSelfMessages）
+//
+// `auditApplyModes()` 会把 missing / stale / none 都列出来。
+// ══════════════════════════════════════════════════════════════════════════
+export const APPLY_MODES = Object.freeze({
+  // ── 重启才生效
+  'dsh.hostUrl': 'restart',
+  'dsh.hostTokenFile': 'restart',
+  'dsh.agentPreset': 'restart',
+  'dsh.requestTimeoutMs': 'restart',
+  'snowluma.selfQq': 'restart',
+  'snowluma.homeDir': 'restart',
+  'chatlog.root': 'restart',
+  'chatlog.agentRoot': 'restart',
+  'chatlog.roleMaxChars': 'restart',
+  'media.root': 'restart',
+  'media.agentRoot': 'restart',
+  'media.totalMb': 'restart',
+  'watch.enabled': 'restart',
+  'api.port': 'restart',
+  'console.port': 'restart',
+  'console.host': 'restart',
+  'log.file': 'restart',
+
+  // ── 改完立即生效
+  'snowluma.wsUrl': 'live',
+  'snowluma.httpUrl': 'live',
+  'snowluma.accessToken': 'live',
+  'snowluma.wsToken': 'live',
+  'snowluma.heartbeatMs': 'live',
+  'snowluma.heartbeatTimeoutMs': 'live',
+  'snowluma.connectTimeoutMs': 'live',
+  'snowluma.reconnectMinMs': 'live',
+  'snowluma.reconnectMaxMs': 'live',
+  'snowluma.actionTimeoutMs': 'live',
+  'owner.qq': 'live',
+  'role.current': 'live',
+  'allow.private': 'live',
+  'allow.groups': 'live',
+  'allow.allowAllWhenEmpty': 'live',
+  'watch.debounceMs': 'live',
+  'chatlog.wakeLimit': 'live',
+  'chatlog.replyLimit': 'live',
+  'chatlog.maxDays': 'live',
+  'chatlog.maxChars': 'live',
+  'chatlog.idleMs': 'live',
+  'chatlog.triggerWho': 'live',
+  'chatlog.windowWho': 'live',
+  'chatlog.waitDefaultMs': 'live',
+  'chatlog.waitMaxMs': 'live',
+  'console.password': 'live',
+  'log.level': 'live',
+  'log.maxBytes': 'live',
+  'log.maxFiles': 'live',
+  'decide.mode': 'live',
+  'decide.model': 'live',
+  'decide.apiBase': 'live',
+  'decide.apiKey': 'live',
+  'decide.apiKeyFile': 'live',
+  'decide.apiKeyRef': 'live',
+  'decide.timeoutMs': 'live',
+  'decide.maxTokens': 'live',
+  'decide.maxRecentLines': 'live',
+  'decide.thinking': 'live',
+  'decide.cardSections': 'live',
+  'decide.cardMaxChars': 'live',
+  'decide.capabilities': 'live',
+  'decide.ownerAlways': 'live',
+});
+
+// 把配置摊平成叶子路径（`a.b.c`）。数组算叶子。
+export function leafPaths(config = defaultConfig(), prefix = '') {
+  const out = [];
+  for (const [key, value] of Object.entries(config ?? {})) {
+    const p = prefix ? `${prefix}.${key}` : key;
+    if (isPlainObject(value)) out.push(...leafPaths(value, p));
+    else out.push(p);
+  }
+  return out;
+}
+
+// 核对"配置项"与"生效方式表"是否对得上。
+//
+// @returns `{ leaves, missing, stale, none }`
+//   missing  schema 里有、表里没有 → 新加的键忘了登记
+//   stale    表里有、schema 里没有 → 删键忘删登记
+//   none     明确标了 none 的键（现在没人读）
+export function auditApplyModes(config = defaultConfig()) {
+  const leaves = leafPaths(config);
+  const missing = leaves.filter((p) => !(p in APPLY_MODES));
+  const stale = Object.keys(APPLY_MODES).filter((p) => !leaves.includes(p));
+  const none = leaves.filter((p) => APPLY_MODES[p] === 'none');
+  return { leaves, missing, stale, none };
+}
+
+// 启动日志/`--check` 用的汇总。
+export function applyModeSummary(config = defaultConfig()) {
+  const live = [];
+  const restart = [];
+  const none = [];
+  for (const p of leafPaths(config)) {
+    const mode = APPLY_MODES[p];
+    if (mode === 'live') live.push(p);
+    else if (mode === 'restart') restart.push(p);
+    else if (mode === 'none') none.push(p);
+  }
+  return { live, restart, none, total: live.length + restart.length + none.length };
+}

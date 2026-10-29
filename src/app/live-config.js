@@ -18,20 +18,17 @@
 // ── 这里**没有**覆盖的东西（改配置前先看这一节）
 //
 // 下列项是"构造时快照进组件、之后没人再读"，因此**热重载不生效，要重启**：
-//   · `dsh.hostUrl` / `dsh.hostTokenFile` → host-client 构造参数（令牌现读，地址不换）
+//   · `dsh.hostUrl` / `dsh.hostTokenFile` → host-client 构造参数
 //   · `dsh.agentPreset` → DshDeliverer 构造参数
 //   · `chatlog.roleMaxChars` → RoleStore 构造参数
 //   · `chatlog.root` / `chatlog.agentRoot` / `media.root` / `media.agentRoot`
-//     / `api.port` / `console.port` → 路径映射与监听端口
-//   · `watch.enabled` → 只在 `startWatching()` 里读过一次，运行中改成 false 不会停监听
+//     / `media.totalMb` / `api.port` / `console.port` / `console.host` / `log.file`
+//   · `snowluma.selfQq` / `snowluma.homeDir` → 启动时的身份与发现流程
+//   · `watch.enabled` → 只在 `startWatching()` 里读过一次
 //
-// 其余都是即时生效的：`snowluma.*`（这里推给 http/ws）、`chatlog.*` 的状态机项、
-// `allow.*`、`owner.qq`、`log.*`（`log.level` 由 Logger.applyConfig 吃）。
-//
-// ── 已知"改了也不起作用"的配置
-//
-// **当前为空**。下次再发现「改了没反应」的键就记在这里 —— 假旋钮是最难被发现
-// 的配置故障：磁盘变了、日志说已热重载、运行时不理会。
+// **权威清单在 `config/schema.js` 的 `APPLY_MODES`**：每个键都标了
+// `live` / `restart` / `none`，`--check` 会核对（缺登记、残留登记、以及"现在没人读"
+// 的假旋钮都会报出来）。这里的段落只是给人看的摘要，别再手抄一份清单 —— 两份必然漂移。
 import { resolveSnowLumaEndpoints } from '../onebot/snowluma.js';
 
 // 热重载后把能即时生效的项应用到运行中的组件。

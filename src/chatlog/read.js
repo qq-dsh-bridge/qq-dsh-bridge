@@ -54,6 +54,12 @@ export const PHASES = Object.freeze({
 //
 // ── 为什么不跳过"自己发的"
 //
+// ⚠️ **前提**：SnowLuma 侧必须推"本号发出的消息"
+//    （`networks.{httpServers,wsServers}[].reportSelfMessage: true`，改完要重启它）。
+//    那是 SnowLuma 自己的配置，桥接改不了也读不到 —— 只能在文档里提醒。
+//    不推的话：收不到 Yunzai 的发言（两个 bot 互相抢答），而且上下文里会出现
+//    "有人 @ 我 → 直接跳到我说的话"的断层。
+//
 // **不要**按 `role === 'self'` 跳过：本机可能有两个 bot **共用同一个 QQ 号**
 // （DSH agent 与 Yunzai）。OneBot 事件里它们看起来完全一样 —— 都是 self_id
 // 发的，所以本号说的话也要算"欠读"。

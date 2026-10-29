@@ -42,7 +42,7 @@ import {
   validateSessionOverrides,
 } from './schema.js';
 import { readConfigFile } from './load.js';
-import { writeConfigFile } from './write.js';
+import { mutateConfigFile } from './write.js';
 import { stableStringify } from '../util/value.js';
 
 // 覆盖层文件名（与 config.json 并排，仓库根）。
@@ -88,6 +88,8 @@ export class SessionOverrides {
     this.patchCache = new Map();
     // convKey → { base, rev, out }（最终生效配置）
     this.effectiveCache = new Map();
+    // 变更订阅者（`ConfigStore.attachSessions()` 会挂一个）。
+    this.listeners = new Set();
   }
 
   // 首次加载。**不合法时抛错** —— 与 config.json 一样 fail-closed：
@@ -239,7 +241,7 @@ export class SessionOverrides {
   // @param options.convKey 会话键（或 `"*"`）
   // @param options.patch   要合并进去的补丁
   // @returns `{ file, doc }`
-  set(convKey, patch, { now = Date.now } = {}) {
+  set(convKey, patch) {
     const key = String(convKey ?? '');
     if (key !== WILDCARD && !isConvKey(key)) {
       const err = new ConfigError(`会话键格式不对："${key}"`, {
@@ -256,21 +258,21 @@ export class SessionOverrides {
       const cur = isPlainObject(sessions[key]) ? sessions[key] : {};
       sessions[key] = deepMerge(cur, patch ?? {});
       return { ...doc, sessions };
-    }, { now });
+    }, 'console-save');
   }
 
   // 清掉一个会话的全部覆盖（"恢复默认"）。
-  clear(convKey, { now = Date.now } = {}) {
+  clear(convKey) {
     const key = String(convKey ?? '');
     return this.#mutate((doc) => {
       const sessions = { ...(doc.sessions ?? {}) };
       delete sessions[key];
       return { ...doc, sessions };
-    }, { now });
+    }, 'console-clear');
   }
 
   // 删掉某个会话里**单个字段**的覆盖（留着同会话的其他字段）。
-  unset(convKey, dottedPath, { now = Date.now } = {}) {
+  unset(convKey, dottedPath) {
     const key = String(convKey ?? '');
     const parts = String(dottedPath ?? '').split('.').filter(Boolean);
     if (!parts.length) {
@@ -291,34 +293,54 @@ export class SessionOverrides {
       if (Object.keys(next).length) sessions[key] = next;
       else delete sessions[key];
       return { ...doc, sessions };
-    }, { now });
+    }, 'console-unset');
   }
 
-  #mutate(fn, { now }) {
-    const { found, value } = readConfigFile(this.file);
-    const base = found && isPlainObject(value) ? value : sessionsDefault();
-    const next = fn({ ...sessionsDefault(), ...base });
-
-    const { ok, errors } = validateSessionOverrides(next);
-    if (!ok) {
-      const detail = errors.map(String);
+  // 读盘 → 变换 → 校验 → 原子写 → 同步内存 → 通告。写入口只有 `mutateConfigFile` 一处。
+  #mutate(fn, reason) {
+    const written = mutateConfigFile({
+      file: this.file,
+      mutate: (base) => fn({ ...sessionsDefault(), ...base }),
+      validate: validateSessionOverrides,
       // 把**第一条**明细拼进标题：控制台的提示条只显示 `message`，
       // 只给"校验未通过"等于让用户自己去猜哪个字段错了。
-      const err = new ConfigError(`会话覆盖层校验未通过，未写入：${detail[0] ?? ''}`, { path: 'sessions' });
-      err.errors = detail;
-      throw err;
-    }
+      errorMessage: (list) => `会话覆盖层校验未通过，未写入：${list[0] ?? ''}`,
+    });
 
-    const written = writeConfigFile({ file: this.file, config: next });
     // 写完之后立刻同步内存态：控制台保存后下一条消息就该生效，
     // 不等文件监听（那条是给"人手工改文件"用的）。
-    this.doc = normalizeDoc(next);
+    this.doc = normalizeDoc(written.config);
     this.found = true;
     this.errors = [];
     this.revision += 1;
     this.patchCache.clear();
     this.effectiveCache.clear();
-    return { ...written, doc: this.doc };
+    // 内存已变 → 由**发起方**宣布，不再需要 store 侧 `force: true` 补事件。
+    this.#notify(reason);
+    return { file: written.file, doc: this.doc };
+  }
+
+  // 变更订阅：`set` / `unset` / `clear` 改完内存就通知一次。
+  //
+  // 这是"退掉 `reloadSessions({ force: true })`"的另一半：以前控制台直接改内存，
+  // 之后 watcher 重读会判定"没变化"、不发事件，只能由调用方强制补发一次。
+  // 现在由**改动的发起方**自己宣布 —— 语义是"状态变了"，而不是"文件变没变"。
+  //
+  // @param fn `({ reason, revision }) => void`
+  // @returns 取消订阅
+  onChange(fn) {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+
+  #notify(reason) {
+    for (const fn of this.listeners) {
+      try {
+        fn({ reason, revision: this.revision });
+      } catch (error) {
+        this.logger?.warn('会话覆盖变更通知抛错', { error: String(error) });
+      }
+    }
   }
 }
 

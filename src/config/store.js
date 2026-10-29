@@ -27,6 +27,9 @@ import { ConfigError } from './schema.js';
 import { stableStringify } from '../util/value.js';
 
 export class ConfigStore extends EventEmitter {
+  // 覆盖层变更订阅的取消函数（`attachSessions` 里挂上/换掉）。
+  #sessionsUnsub = null;
+
   // @param options.root        仓库根（config.json 所在目录）
   // @param options.configPath  显式配置文件路径
   // @param options.env         环境变量表
@@ -53,6 +56,8 @@ export class ConfigStore extends EventEmitter {
     // 同一个 debounce。各开一个 watcher 会让"一次保存触发两次重载"的窗口翻倍，
     // 而且两个 debounce 会互相错开（配置已经生效、覆盖层还差 250ms）。
     this.sessions = null;
+    // 覆盖层变更订阅的取消函数（`attachSessions` 里挂）。
+    this.#sessionsUnsub = null;
   }
 
   // 挂上会话覆盖层，让它跟着同一个目录监听一起热重载。
@@ -61,6 +66,19 @@ export class ConfigStore extends EventEmitter {
   //    （症状：改了 config.sessions.json 没反应，直到重启）。
   attachSessions(sessions) {
     this.sessions = sessions ?? null;
+    // 会话覆盖层的**写操作**（控制台 set / unset / clear）改完内存会自己宣布，
+    // 这里把它转成 `sessions-change` —— 于是"改了要立刻对账"不再需要调用方
+    // 用 `force: true` 手动补发（写入方自己知道状态变了，比事后比对文件更准）。
+    this.#sessionsUnsub?.();
+    this.#sessionsUnsub = this.sessions?.onChange?.(({ reason, revision }) => {
+      this.emit('sessions-change', {
+        sessions: this.sessions,
+        previous: null,
+        reason: reason || 'sessions-mutate',
+        changed: true,
+        revision,
+      });
+    }) ?? null;
     return this;
   }
 
@@ -202,36 +220,24 @@ export class ConfigStore extends EventEmitter {
 
   // 重读会话覆盖层。失败时**保留上一份可用覆盖层**（与 reload 同一策略）。
   //
-  // ── `force` 为什么存在
-  //
-  // 控制台保存走的是 `overrides.set()` —— 它**当场就把内存改了**，文件也已落盘。
-  // 之后 watcher 触发的 `reload()` 与内存一比"没变化"，`changed=false`，
-  // 于是 `sessions-change` **永远不发**。
-  //
-  // 而 main.js 只有收到这个事件才会 `reconcileRoles()`：停掉旧角色名下正在跑的回合、
-  // 清掉 per-conv 的 agentRunning/等待态。不发事件的后果（实测）：
-  // 控制台把某个群从 A 改成 B 之后，A 那个会话里**还在跑的回合没人停**，
-  // 于是群里最后收到的仍是 A 的回复 —— 看起来像"改了角色还在往旧角色投递"。
-  //
-  // 所以控制台改完要显式 `force` 一次：哪怕内容没变（因为就是它自己改的），
-  // 也要把"变更已发生"这件事通知下去。
+  // 只负责"文件变了没有"：内容没变就不发事件。
+  // 而"控制台改了内存"这种**不是文件变化**的变更，由 `SessionOverrides` 的
+  // 写操作自己 `onChange` 通告（见 `attachSessions`）—— 不再需要 `force`。
   //
   // @returns `{ changed, errors }`
-  reloadSessions({ reason = 'manual', force = false } = {}) {
+  reloadSessions({ reason = 'manual' } = {}) {
     if (!this.sessions) return { changed: false, errors: [] };
     const result = this.sessions.reload();
     if (result.errors?.length) {
       this.emit('error', result.errors, { reason, keptPrevious: true, target: 'sessions' });
       return result;
     }
-    if (result.changed || force) {
+    if (result.changed) {
       this.emit('sessions-change', {
         sessions: this.sessions,
         previous: null,
         reason,
-        // `force` 时 `changed` 是 false —— 带上它，订阅方能分清"文件真变了"还是
-        // "别人已经在内存里改过了，只是需要我重新对账"。
-        changed: Boolean(result.changed),
+        changed: true,
         revision: this.sessions.revision,
       });
     }

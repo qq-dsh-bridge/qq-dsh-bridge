@@ -30,11 +30,14 @@ import { validateConfig, ConfigError, deepMerge, isPlainObject } from './schema.
 import { deepEqual } from '../util/value.js';
 import { readConfigFile } from './load.js';
 
-export class ConfigWriteError extends Error {
-  constructor(message, { hint = '', errors = [] } = {}) {
-    super(message);
+// 写配置时的错误。
+//
+// **继承 `ConfigError`**：调用方（控制台、脚本、测试）普遍按"配置错误"一网打尽，
+// 分成两个互不相干的错误类型会让 `instanceof ConfigError` 这类判断漏掉写失败。
+export class ConfigWriteError extends ConfigError {
+  constructor(message, { hint = '', errors = [], path = '' } = {}) {
+    super(message, { hint, path });
     this.name = 'ConfigWriteError';
-    this.hint = hint;
     this.errors = errors;
   }
   toString() {
@@ -187,6 +190,48 @@ export function readConfigForConsole({ file }) {
   return { found, file, value };
 }
 
+// ── 唯一的写入口：**校验通过才落盘** ──────────────────────────────────────
+//
+// 以前"读盘→合并→校验→原子写"被抄了三份（`updateConfigFile`、
+// `SessionOverrides.#mutate`、控制台的整份保存），三份的措辞和错误处理各写一遍。
+// 现在只有这两层：
+//
+//   writeValidatedConfig  校验 + 原子写（不读盘）—— 给定完整对象时用
+//   mutateConfigFile      读盘 + 变换 + 校验 + 原子写 —— 局部更新时用
+//
+// `writeConfigFile` 退化成"纯字节搬运"，不再对外承诺"已经校验过"。
+//
+// @param options.errorMessage 字符串，或 `(errors: string[]) => string`
+// @throws ConfigWriteError 校验不过时**不写文件**
+export function writeValidatedConfig({
+  file, config, validate = validateConfig, errorMessage = '配置校验未通过，未写入',
+} = {}) {
+  const { ok, errors } = validate(config, { strict: true });
+  if (!ok) {
+    const list = (errors ?? []).map(String);
+    const message = typeof errorMessage === 'function' ? errorMessage(list) : errorMessage;
+    throw new ConfigWriteError(message, { errors: list });
+  }
+  return writeConfigFile({ file, config });
+}
+
+// 读盘 → 变换 → 校验 → 原子写。
+//
+// `mutate(base, { found })` 返回**要写入的完整对象**；它拿到的 base 是磁盘上那份
+// （文件不存在时是 `{}`，由调用方补默认形状 —— 两份文件的"空文件"含义不同）。
+//
+// @returns `{ file, config }` —— config 是实际写下去的那份
+export function mutateConfigFile({
+  file, mutate, validate = validateConfig, errorMessage,
+} = {}) {
+  if (typeof mutate !== 'function') throw new ConfigWriteError('mutateConfigFile 需要 mutate 函数');
+  const { found, value } = readConfigFile(file);
+  const base = found && isPlainObject(value) ? value : {};
+  const next = mutate(base, { found });
+  const written = writeValidatedConfig({ file, config: next, validate, errorMessage });
+  return { ...written, config: next };
+}
+
 // *局部更新**配置里的几个键（不是整份表单提交）。
 //
 // ── 与 `mergeChangedOnly` 的分工
@@ -204,19 +249,11 @@ export function readConfigForConsole({ file }) {
 //
 // @returns `{ file, config }` —— config 是写入后的完整对象
 export function updateConfigFile({ file, patch } = {}) {
-  const { found, value } = readConfigFile(file);
-  const base = found && isPlainObject(value) ? value : {};
-  const next = deepMerge(structuredClone(base), patch ?? {});
-
-  const { ok, errors } = validateConfig(next, { strict: true });
-  if (!ok) {
-    throw new ConfigWriteError('局部更新后的配置校验未通过，未写入', {
-      errors: errors.map(String),
-    });
-  }
-
-  const written = writeConfigFile({ file, config: next });
-  return { ...written, config: next };
+  return mutateConfigFile({
+    file,
+    mutate: (base) => deepMerge(structuredClone(base), patch ?? {}),
+    errorMessage: '局部更新后的配置校验未通过，未写入',
+  });
 }
 
 export { ConfigError };

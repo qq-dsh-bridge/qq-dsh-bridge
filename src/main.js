@@ -7,6 +7,7 @@ import { updateConfigFile } from './config/write.js';
 import { createSessionOverrides, SESSIONS_FILE } from './config/sessions.js';
 import { ConfigFacade } from './config/facade.js';
 import { reportConfigFailure, logEffectiveConfig } from './config/report.js';
+import { auditApplyModes, applyModeSummary } from './config/schema.js';
 import { Logger } from './util/logger.js';
 import { probeHost, probeOneBotHttp } from './app/probe.js';
 import { wireTurnTracking } from './app/wire-stream.js';
@@ -161,6 +162,13 @@ async function main() {
   }
 
   logEffectiveConfig(logger, bootConfig);
+  const applySummary = applyModeSummary(bootConfig);
+  logger.debug('配置项生效方式汇总', {
+    total: applySummary.total,
+    live: applySummary.live.length,
+    restart: applySummary.restart.length,
+    none: applySummary.none.length,
+  });
   for (const key of initial.envOverridden ?? []) {
     logger.warn('该配置项被环境变量覆盖（优先于 config.json）', { key });
   }
@@ -169,6 +177,36 @@ async function main() {
   }
 
   if (checkOnly) {
+    // ── 配置项 × 生效方式 审计 ──────────────────────────────────────────
+    //
+    // 目的是把"改了没反应"提前成**启动前就能看见**的问题：
+    //   missing  新加了配置键却忘了登记生效方式
+    //   stale    删了键却忘了删登记
+    //   none     标了 none 的键 = 现在没有任何消费者（假旋钮）
+    const audit = auditApplyModes(bootConfig);
+    const summary = applyModeSummary(bootConfig);
+    logger.info('配置项生效方式', {
+      total: summary.total,
+      live: summary.live.length,
+      restart: summary.restart.length,
+      none: summary.none.length,
+    });
+    let fatal = 0;
+    if (audit.missing.length) {
+      fatal += 1;
+      logger.error('这些配置项没有登记生效方式（新加键忘了记）', { keys: audit.missing.join(', ') });
+    }
+    if (audit.stale.length) {
+      fatal += 1;
+      logger.error('生效方式表里有 schema 中已不存在的键（删键忘了删登记）', { keys: audit.stale.join(', ') });
+    }
+    if (audit.none.length) {
+      // 不致命：先让人看见，再决定"实现"还是"删键"。
+      logger.warn('这些配置项现在没有任何消费者（假旋钮：去实现，或从 schema 删掉）', {
+        keys: audit.none.join(', '),
+      });
+    }
+
     logger.info('--check：配置校验通过，退出', {
       sessions: sessions.count,
       wildcard: Boolean(sessions.wildcard),
@@ -178,6 +216,7 @@ async function main() {
       logger.info(`会话覆盖 ${key}`, { fields: sessions.describe(key).join(', ') || '(空)' });
     }
     await logger.close();
+    if (fatal) process.exitCode = 4;
     return;
   }
 
@@ -553,14 +592,10 @@ async function main() {
       // 文件监听会自己触发热重载；这里只记一行便于在日志里看到"刚被改过"。
       logger.info('配置已由控制台写入，等待热重载生效');
     },
-    // 会话覆盖被控制台改完 → 让 store 重发一次 `sessions-change`（`force`）。
-    //
-    // 控制台是直接改的同一个 `SessionOverrides` 实例，内存早就更新了，
-    // 所以 watcher 之后重读会判定"没变化"、**不会**发事件；而角色对账
-    // （停旧回合 / 重建会话）只挂在那条事件上。详见 `reloadSessions` 的注释。
+    // 会话覆盖被控制台改完：`SessionOverrides` 的写操作**自己**会发
+    // `sessions-change`（见 config/store.js 的 attachSessions），这里只留一行日志。
     onSessionsChanged: ({ action, key }) => {
-      logger.info('控制台改了会话覆盖，立即对账', { action, key });
-      store.reloadSessions({ reason: 'console', force: true });
+      logger.info('控制台改了会话覆盖', { action, key });
     },
     logger,
   });

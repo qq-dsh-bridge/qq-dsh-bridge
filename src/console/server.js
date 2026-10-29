@@ -19,7 +19,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
-  checkConfig, writeConfigFile, readConfigForConsole, mergeChangedOnly,
+  checkConfig, writeValidatedConfig, readConfigForConsole, mergeChangedOnly,
 } from '../config/write.js';
 import { SESSION_OVERRIDABLE } from '../config/schema.js';
 import {
@@ -766,7 +766,13 @@ export class ConsoleServer {
     }
 
     // ③ 原子写（不备份：备份里是明文密码与 token）。
-    const written = writeConfigFile({ file: this.configFile, config: merged });
+    //    走统一写入口 `writeValidatedConfig`：它在落盘前**再校验一次**，
+    //    所以"没校验就写出去"在结构上不可能发生。
+    const written = writeValidatedConfig({
+      file: this.configFile,
+      config: merged,
+      errorMessage: '合并后的配置校验未通过（可能是运行时值与提交值冲突）',
+    });
 
     // ④ 通知外层（热重载由文件监听自动触发，这里只是即时反馈）。
     try {
