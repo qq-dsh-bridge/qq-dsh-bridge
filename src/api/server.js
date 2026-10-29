@@ -132,7 +132,9 @@ export class BridgeApi {
 
     const key = spec.authFree ? '' : this.authenticate(args.key, meta.host);
 
-    const handler = this.handlers?.[op];
+    // 把本次请求的 meta（含 abort signal）注入进去，handler 里就能感知"消费者还在不在"。
+    const rawHandler = this.handlers?.[op];
+    const handler = rawHandler ? (k, a) => rawHandler(k, a, meta) : null;
     if (!handler) {
       throw new BridgeApiError(
         `操作 "${op}" 尚未接入（桥接未提供该能力）`,
@@ -236,9 +238,15 @@ export function startBridgeApiServer({ api, port, host = '127.0.0.1', logger }) 
         return;
       }
 
+      // 连接断了（模型/插件侧取消、回合被归档、进程被杀）→ 让长任务知道没人接了。
+      // 没有这一条，`qq_wait` 会在消费者消失后继续挂着，把后续消息全吃进一个死人手里。
+      const ac = new AbortController();
+      res.on('close', () => { if (!res.writableEnded) ac.abort(); });
+
       try {
         const result = await api.call(payload.op, payload.args ?? {}, {
           host: req.headers['x-qq-host'],
+          signal: ac.signal,
         });
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: true, result }));

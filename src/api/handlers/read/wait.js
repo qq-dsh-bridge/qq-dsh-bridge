@@ -30,7 +30,7 @@ function normalizeQq(v, logger) {
   return out;
 }
 
-export async function run({ registry, logger }, convKey, args) {
+export async function run({ registry, logger }, convKey, args, meta = {}) {
   const conv = registry.get(convKey);
   const budget = conv.nextWaitMs();
 
@@ -58,6 +58,8 @@ export async function run({ registry, logger }, convKey, args) {
 
   const result = await conv.waitForMessages({
       timeoutMs: budget, maxMs: budget, qq: qqList,
+      // 消费者（这条 HTTP 请求）断了就别再挂着 —— 见 turn/wait.js 的 abort 处理
+      signal: meta?.signal,
   });
 
   // 与 qq_read_chat 共用 messageRow —— 两处曾各自实现，分叉出"同名不同义"。

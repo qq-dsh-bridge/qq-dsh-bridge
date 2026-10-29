@@ -17,7 +17,7 @@ export class Waits {
   }
 
   // 开始等
-  wait({ timeoutMs = 300_000, maxMs = 1_800_000, quietMs = 0, qq } = {}) {
+  wait({ timeoutMs = 300_000, maxMs = 1_800_000, quietMs = 0, qq, signal } = {}) {
 
     if (this.active) return this.active.promise;
 
@@ -52,6 +52,19 @@ export class Waits {
       qq: wanted,
       lastActivityTs: waitedFromTs,
     };
+
+    // 消费者是谁：那条还挂着的 API 请求。它断了（回合被归档/取消/进程走掉）
+    // 就说明没人会来收这批结果 —— 立刻结算，别让 wait 变成一个吞消息的黑洞。
+    if (signal) {
+      if (signal.aborted) {
+        this.#settle('cancelled');
+        return promise;
+      }
+      const onAbort = () => this.#settle('cancelled');
+      signal.addEventListener('abort', onAbort, { once: true });
+      this.active.signal = signal;
+      this.active.onAbort = onAbort;
+    }
 
     if (this.poolWake()) {
       const t = setTimeout(() => this.#settle('arrived'), 0);
@@ -162,6 +175,7 @@ export class Waits {
     if (w.capTimer) clearTimeout(w.capTimer);
     if (w.recheckTimer) clearTimeout(w.recheckTimer);
 
+    if (w.signal && w.onAbort) w.signal.removeEventListener('abort', w.onAbort);
     this.waitedTotalMs = (this.waitedTotalMs || 0) + Math.max(0, Date.now() - w.waitedFromTs);
     const takeLimit = Number(host.config.replyLimit) > 0 ? Number(host.config.replyLimit) : 20;
     const { messages: taken, omitted } = takeMessages({ store: host.store, pool: host.turnPool, limit: takeLimit });
@@ -186,17 +200,18 @@ export class Waits {
     };
 
     if (result.newMessages.length && how === 'arrived') {
+      // `arrived` 的含义只有一个：这批已经交给调用方（那条阻塞的 API 请求）。
+      // 所以**一律标已读**。
+      //
+      // ⚠️ 别拿 `agentRunning` 当判据：dsh 在等工具结果时就报 running=false，
+      //    那是这个工具的常态。按它判 = 每批都不标已读 = 反复投递同一批（重复回答）。
       if (host.agentRunning === false) {
-        // 回合"看起来"没在跑（dsh 在等工具结果时会报 running=false；桥接重启后
-        // 也可能是初始值 false）。消息照样返回给调用方，但**保守地不标已读** ——
-        // 万一没被真正消费，下次投递还能把它们再带上。
-        host.logger?.warn('qq_wait 返回时回合状态为"未运行"：这批不标已读（可能重复出现）', {
+        host.logger?.debug('qq_wait 返回时 dsh 报未运行（等工具结果的常态），照标已读', {
           conv: host.key, count: result.newMessages.length,
         });
-      } else {
-        host.turnPool.markRead(result.newMessages);
-        host.turnPool.mark(result.newMessages, MARKS.DELIVERED);
       }
+      host.turnPool.markRead(result.newMessages);
+      host.turnPool.mark(result.newMessages, MARKS.DELIVERED);
     }
 
     w.resolveFn(result);

@@ -170,7 +170,7 @@ export function buildHandlers(deps) {
   for (const spec of HANDLERS) {
     const lack = declaredDeps(spec.run).filter((k) => !(k in deps));
     if (lack.length) missing.push(`${spec.op} 需要 ${lack.join(', ')}`);
-    out[spec.op] = (convKey, args) => spec.run(deps, convKey, args);
+    out[spec.op] = (convKey, args, meta) => spec.run(deps, convKey, args, meta);
   }
 
   if (missing.length) {
