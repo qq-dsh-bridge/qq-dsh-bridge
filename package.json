@@ -11,11 +11,12 @@
   "main": "src/main.js",
   "scripts": {
     "start": "node src/main.js",
-    "test": "node scripts/test-normalize.mjs && node scripts/test-recall.mjs && node scripts/test-sessions.mjs && node scripts/test-content.mjs",
+    "test": "node scripts/test-normalize.mjs && node scripts/test-recall.mjs && node scripts/test-sessions.mjs && node scripts/test-content.mjs && node scripts/test-wait.mjs",
     "test:normalize": "node scripts/test-normalize.mjs",
     "test:recall": "node scripts/test-recall.mjs",
     "test:sessions": "node scripts/test-sessions.mjs",
     "test:content": "node scripts/test-content.mjs",
+    "test:wait": "node scripts/test-wait.mjs",
     "check": "node src/main.js --check"
   }
 }

@@ -185,10 +185,29 @@ export class ConversationState {
     );
 
     const hasWait = Boolean(this.activeWait);
-    // "活着的"等待：`activeWait` 挂着 **且** 这一轮还没结束（否则结果没人接）。
-    const waiting = hasWait && this.agentRunning;
 
-    // ③ **不在回合里**（睡着 / 刚收摊 / wait 挂着但回合已结束）→ 走 `triggerWho`。
+    // ① **wait 优先**：`qq_wait` 是**阻塞的工具调用**，它挂着的时候，
+    //    一条消息该不该让它返回，判据是「`windowWho` 放行 ∪ `qq` 免 @ 名单」
+    //    —— 全在 `Waits#allows` / `gate.js::waitHit` 里。
+    //
+    // ⚠️ **不能拿 `agentRunning` 当这个判据**（老实现是 `hasWait && agentRunning`）：
+    //    agent 在等工具结果时，dsh 那边会报 `running=false`；桥接重启后更糟 ——
+    //    会话映射要等下一次投递才建立，`agentRunning` 会一直是初始值 false。
+    //    此时主人连发几条（没 @ 它）全被当成"未触发"塞进池子，wait 干等到超时。
+    //    实测症状就是："qq_wait 挂着，你说话了，它没反应"。
+    //
+    //    "结果没人接"的风险不在这里兜 —— `Waits#settle` 里另有护栏：
+    //    回合确实结束了就**不标已读**（消息留在池里，下次真投递照样带上）。
+    const waiting = hasWait;
+
+    if (waiting) {
+      this.#touchAwake();       // 说上话了，窗口往后推
+      this.waits.refresh();     // 有人说话就续命（不续命的话"正聊着"会被硬断）
+      this.waits.notify(stored);
+      return { action: 'handed-to-wait', reason, seq: seqOf(stored, stored.date), date: stored.date };
+    }
+
+    // ② **不在回合里**（睡着 / 刚收摊）→ 走 `triggerWho`。
     //
     // 这是"开一轮新投递（带 `[lines:N]` 那次）"的闸：**`triggerWho` 放行 且 这条 @ 了它**。
     // 两个都要 —— 放行是权限，`@` 是"在叫我"。
@@ -196,18 +215,11 @@ export class ConversationState {
       const gateWho = normalizeWho(this.config.trigger?.who);
       const allowed = gateAllows(gateWho, message.sender?.qq, this.ownerQq) && Boolean(reason);
       if (!allowed) {
-        // 未过闸：不更新水位、不叫醒等待、**也不续命**。
+        // 未过闸：不更新水位、**也不续命**。
         if (!reason) this.stats.skippedNotTrigger += 1;
         else this.stats.skippedGate += 1;
         const why = reason ? 'gate' : 'not-triggered';
         return { action: 'buffered', reason: why, seq: seqOf(stored, stored.date), date: stored.date };
-      }
-      if (hasWait) {
-        // 有个 wait 挂着、但回合已经结束 ⇒ 不能交给它（结果没人接，还会标已读 = 永久丢失）。
-        this.logger?.warn('等待中的回合已结束：这条改走正常投递（交给 wait 会被吞掉）', {
-          conv: this.key, seq: seqOf(stored, stored.date),
-        });
-        this.cancelWait();
       }
       this.gatedAt = message.tsMs ?? Date.now();
 
@@ -238,16 +250,7 @@ export class ConversationState {
       return this.#deliver({ reason, isOwner, message: stored });
     }
 
-    // ④ **回合内**：
-    //   · 正在等 → 按「`windowWho` ∪ wait 参数」判要不要立刻返回（判据在 `#notifyWait`）
-    //   · 没在等 → 已经在池里了，什么都不做（模型马上会开 wait）
-    if (waiting) {
-      this.#touchAwake();       // 说上话了，窗口往后推
-      this.waits.refresh(); // 有人说话就续命（不续命的话"正聊着"会被硬断）
-      this.waits.notify(stored);
-      return { action: 'handed-to-wait', reason, seq: seqOf(stored, stored.date), date: stored.date };
-    }
-
+    // ③ **回合内、没在等** → 已经在池里了，什么都不做（模型马上会开 wait）
     this.logger?.debug('回合内、没在等 → 入池（等模型开 wait 时再按规则筛）', {
       conv: this.key, seq: seqOf(stored, stored.date), reason,
     });

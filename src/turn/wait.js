@@ -187,7 +187,10 @@ export class Waits {
 
     if (result.newMessages.length && how === 'arrived') {
       if (host.agentRunning === false) {
-        host.logger?.warn('qq_wait 返回时回合已结束：这批不标已读（结果没人接）', {
+        // 回合"看起来"没在跑（dsh 在等工具结果时会报 running=false；桥接重启后
+        // 也可能是初始值 false）。消息照样返回给调用方，但**保守地不标已读** ——
+        // 万一没被真正消费，下次投递还能把它们再带上。
+        host.logger?.warn('qq_wait 返回时回合状态为"未运行"：这批不标已读（可能重复出现）', {
           conv: host.key, count: result.newMessages.length,
         });
       } else {
