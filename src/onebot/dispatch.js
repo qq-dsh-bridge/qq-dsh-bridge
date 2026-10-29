@@ -104,7 +104,7 @@ export function attachOneBotEvents(ws, deps) {
 
 async function handleMessage(event, deps) {
   const {
-    registry, allow, logger,
+    registry, allow, getAllow, logger,
   } = deps;
 
   // ① 解析成内部形状。失败要可见地丢，不能静默。
@@ -122,7 +122,9 @@ async function handleMessage(event, deps) {
   if (!normalized) return;
 
   // ② 白名单 —— 必须在任何副作用之前（否则会建目录、写库）。
-  if (!isConvAllowed(normalized.convKey, allow)) {
+  //    现取：配置门面给的是冻结快照，热重载后下一条消息就用新的那份。
+  const allowNow = typeof getAllow === 'function' ? getAllow() : allow;
+  if (!isConvAllowed(normalized.convKey, allowNow)) {
     logger.debug('会话不在白名单内，完全忽略', {
       conv: normalized.convKey,
       sender: normalized.message.sender?.name,

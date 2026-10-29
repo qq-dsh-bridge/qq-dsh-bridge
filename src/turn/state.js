@@ -28,10 +28,30 @@ export class ConversationState {
 
   // #region 构造与字段
 
-  constructor({ key, ownerQq, config = {}, store, onDeliver, logger, judge, decideLog } = {}) {
+  // 身份与配置都是**每次现取**（取值函数由 `config/facade.js` 提供）。
+  // 直接传 `ownerQq` / `config` 的老写法仍然有效，当作常量 —— 测试与单机脚本用得上。
+  //
+  // ⚠️ 不要再引入"持有配置对象 + 就地改"的写法：门面给的是 deepFreeze 过的快照，
+  //    改它会在严格模式下当场抛错（见 `config/facade.js` 文件头）。
+  #getOwnerQq = null;
+  #getConfig = null;
+  #staticOwnerQq = '';
+  #staticConfig = {};
+
+  get ownerQq() {
+    return this.#getOwnerQq ? this.#getOwnerQq() : this.#staticOwnerQq;
+  }
+
+  get config() {
+    return this.#getConfig ? this.#getConfig() : this.#staticConfig;
+  }
+
+  constructor({ key, ownerQq = '', getOwnerQq, config = {}, getConfig, store, onDeliver, logger, judge, decideLog } = {}) {
     this.key = key;
-    this.ownerQq = ownerQq;
-    this.config = config;
+    this.#staticOwnerQq = String(ownerQq ?? '');
+    this.#staticConfig = config ?? {};
+    this.#getOwnerQq = typeof getOwnerQq === 'function' ? getOwnerQq : null;
+    this.#getConfig = typeof getConfig === 'function' ? getConfig : null;
     this.store = store;
     this.onDeliver = onDeliver;
     this.logger = logger;
@@ -264,7 +284,7 @@ export class ConversationState {
       // 取未读时最多回溯几天。⚠️ 这一项以前**没传** —— `deliver()` 于是落到
       // `DEFAULTS.maxDays = 7`，而 `stateConfig()` 带进来的 `chatlog.maxDays` 因此
       // *没有任何人读**：schema 里验着、控制台里摆着、改了毫无反应（典型"假旋钮"）。
-      // 兜底仍在 `deliver()` 自己身上；`this.config` 是热重载**就地更新**的对象，天然跟着走。
+      // 兜底仍在 `deliver()` 自己身上；`this.config` 是**现取的快照**（配置门面按 revision 记忆），天然跟着热重载走。
       maxDays: this.config.maxDays,
       // ⚠️ `selfQq` **必须传**：渲染层靠它把本号显示成〔本号〕、并在行尾标 `← @ 了你`。
       //    不传的话本号显示成普通昵称、"这条 @ 了你"的标记也不出现 —— 实测后果是
@@ -493,6 +513,20 @@ export class ConversationState {
 
 // 管理多个会话的状态机。启动时全部 sleeping（内存态，不落盘）。
 export class ConversationRegistry {
+  // 与 `ConversationState` 同一套：常量兜底 + 取值函数优先（取值函数来自配置门面）。
+  #getOwnerQq = null;
+  #getConfig = null;
+  #staticOwnerQq = '';
+  #staticConfig = {};
+
+  get ownerQq() {
+    return this.#getOwnerQq ? this.#getOwnerQq() : this.#staticOwnerQq;
+  }
+
+  get config() {
+    return this.#getConfig ? this.#getConfig() : this.#staticConfig;
+  }
+
   // @param options.onConversationCreated 新会话第一次出现时回调（用于按需登记 workspace）
   // @param options.resolveConfig `(convKey) => 状态机配置`
   //
@@ -500,10 +534,14 @@ export class ConversationRegistry {
   //   不传时所有会话共用 `options.config`，行为与引入覆盖层之前完全一致。
   //   传了就对每个会话单独解析 —— 于是"这个群只认主人、那个群认所有人"成立。
   constructor({
-    ownerQq, config, resolveConfig, storeFor, onDeliver, onConversationCreated, logger, judge, decideLog,
+    ownerQq = '', config = {}, getOwnerQq, getConfig,
+    resolveConfig, storeFor, onDeliver, onConversationCreated, logger, judge, decideLog,
   } = {}) {
-    this.ownerQq = ownerQq;
-    this.config = config;
+    // 与 `ConversationState` 同一套：常量兜底 + 取值函数优先。
+    this.#staticOwnerQq = String(ownerQq ?? '');
+    this.#staticConfig = config ?? {};
+    this.#getOwnerQq = typeof getOwnerQq === 'function' ? getOwnerQq : null;
+    this.#getConfig = typeof getConfig === 'function' ? getConfig : null;
     this.resolveConfig = typeof resolveConfig === 'function' ? resolveConfig : null;
     this.storeFor = storeFor;
     this.onDeliver = onDeliver;
@@ -529,9 +567,9 @@ export class ConversationRegistry {
 
   // 某个会话该用的状态机配置。
   //
-  // 没有覆盖层时返回 `this.config`（**同一个引用**，与从前一致）；
-  // 有覆盖层时返回它是 `SessionOverrides.resolve()` 的产物 —— 那边保证
-  // "没有覆盖就原样返回 base"，所以这里不需要再判一次。
+  // 没有覆盖层时返回全局那份；有覆盖层时返回该会话自己那份（都由配置门面记忆）。
+  //
+  // 这里**不缓存**：门面按 revision 记忆，热重载后自然就是新对象。
   resolveFor(key) {
     if (!this.resolveConfig) return this.config;
     try {
@@ -544,14 +582,17 @@ export class ConversationRegistry {
   }
 
   // 取（或按需创建）一个会话状态机。
+  //
+  // 会话拿的是**取值函数**而不是配置对象：于是热重载不需要"推给每个会话"，
+  // 也不会出现"对象被就地改/被替换"两套语义并存的情况。
   get(key) {
     let c = this.conversations.get(key);
     if (!c) {
       const store = this.storeFor(key);
       c = new ConversationState({
         key,
-        ownerQq: this.ownerQq,
-        config: this.resolveFor(key),
+        getOwnerQq: () => this.ownerQq,
+        getConfig: () => this.resolveFor(key),
         store,
         onDeliver: this.onDeliver,
         logger: this.logger,
@@ -585,13 +626,14 @@ export class ConversationRegistry {
     return [...this.conversations.values()].map((c) => c.snapshot());
   }
 
-  // 热重载配置：更新所有已存在会话的 config。
+  // 热重载配置。
   //
-  // ⚠️ 有覆盖层时**每个会话拿到的是各自解析出来的对象**，不再是同一个引用 ——
-  //    所以必须逐个重新赋值，不能只改 `this.config`（改了只有新会话能看到）。
+  // 现在**只更新兜底值**：会话拿的是取值函数（`getConfig: () => resolveFor(key)`），
+  // 它们下次取值时自然就是新配置 —— 不再需要"逐个会话重新赋值"。
+  //
+  // 保留这个方法是为了兼容"直接构造 registry 并传死人配置"的用法（测试、脚本）。
   applyConfig(config) {
-    this.config = config;
-    for (const c of this.conversations.values()) c.config = this.resolveFor(c.key);
+    this.#staticConfig = config;
   }
 
   // 退出时清理。

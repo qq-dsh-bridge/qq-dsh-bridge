@@ -179,9 +179,9 @@ export class SessionOverrides {
 
   // 生效配置：`base` 是主配置，返回合并了会话补丁的那份。
   //
-  // ⚠️ **没有补丁时原样返回 `base`（同一个引用）**。
-  //    下游（`ConversationState.config`）把它当"长期存活、就地更新"的对象，
-  //    每次返回新对象会让 `live-config` 的"就地改"契约失效。
+  // **没有补丁时原样返回 `base`（同一个引用）** —— 这不是契约，只是省一次拷贝：
+  // `ConfigFacade` 拿到它之后统一 deepFreeze，谁都不许改（见 config/facade.js）。
+  // 有补丁时返回新对象，同样由门面冻结并记忆。
   //
   // ⚠️ memo 的键是 `(convKey, base 引用, revision)`：主配置热重载会换 `base`，
   //    会话补丁热重载会换 `revision`，两者任一变化都要重算。

@@ -48,9 +48,12 @@ function countSendChars(args) {
 // 发消息**不在这里** —— 那走桥接的发送路径（含白名单与去重）。
 export class BridgeApi {
 
-  constructor({ storeFor, allow, logger, hostTokenFile = '', media = null } = {}) {
+  constructor({ storeFor, allow, getAllow, logger, hostTokenFile = '', media = null } = {}) {
     this.storeFor = storeFor;
-    this.allow = allow ?? { private: [], groups: [], allowAllWhenEmpty: false };
+    // 白名单**每次现取**（配置门面给的冻结快照）；`allow` 只作为老写法的兜底。
+    this.getAllow = typeof getAllow === 'function'
+      ? getAllow
+      : () => allow ?? { private: [], groups: [], allowAllWhenEmpty: false };
     this.logger = logger;
     this.hostTokenFile = hostTokenFile;
     // 统一媒体仓库（图片/语音/视频/文件）—— `GET /m/<id>` 从这里取。
@@ -104,11 +107,13 @@ export class BridgeApi {
   // fail-closed：列表为空且没开 allowAllWhenEmpty ⇒ 一律拒绝。
   assertAllowed(convKey) {
     const [kind, id] = String(convKey).split(':');
-    const list = kind === 'group' ? this.allow.groups : this.allow.private;
+    // 现取：热重载把白名单换了之后，下一条请求就用新的那份。
+    const allow = this.getAllow();
+    const list = kind === 'group' ? allow.groups : allow.private;
     const inList = Array.isArray(list) && list.map(String).includes(String(id));
     if (inList) return;
 
-    if (this.allow.allowAllWhenEmpty && (!this.allow.groups?.length && !this.allow.private?.length)) {
+    if (allow.allowAllWhenEmpty && (!allow.groups?.length && !allow.private?.length)) {
       return;
     }
     throw new BridgeApiError(

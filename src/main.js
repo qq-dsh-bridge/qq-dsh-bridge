@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { ConfigStore } from './config/store.js';
 import { updateConfigFile } from './config/write.js';
 import { createSessionOverrides, SESSIONS_FILE } from './config/sessions.js';
+import { ConfigFacade } from './config/facade.js';
 import { reportConfigFailure, logEffectiveConfig } from './config/report.js';
-import { stateConfig } from './config/state-view.js';
 import { Logger } from './util/logger.js';
 import { probeHost, probeOneBotHttp } from './app/probe.js';
 import { wireTurnTracking } from './app/wire-stream.js';
@@ -96,29 +96,21 @@ async function main() {
   const logger = Logger.fromConfig(bootConfig);
   sessions.logger = logger;
 
-  // 某个会话的**生效配置** = 主配置 + 该会话的覆盖补丁。
+  // ── 配置门面 ──────────────────────────────────────────────────────────
   //
-  // 没有覆盖时 `resolve()` 原样返回 `store.get()`（同一个引用）—— 所以没配覆盖的
-  // 部署行为与引入覆盖层之前**完全一致**。
+  // 所有"当前生效配置"都从这里取，拿到的都是**冻结快照**（按 revision 记忆）：
   //
-  // ⚠️ 每次调用都现取 `store.get()`：主配置热重载后 base 换了，memo 会自然失效。
-  const effectiveConfig = (convKey) => sessions.resolve(store.get(), convKey);
-
-  // 状态机看到的那份形状（`stateConfig` 的产物）。
+  //   config.base()             主配置（默认值 < 文件 < env < argv）
+  //   config.effective(conv)    + 该会话的覆盖补丁
+  //   config.state(conv?)       状态机看到的形状（`stateConfig` 的产物）
+  //   config.allow()            白名单视图（入站 / 出站都现取）
+  //   config.ownerQq()          管理者 QQ
   //
-  // 为什么要再包一层 memo：`stateConfig()` 每次都造**新对象**，直接把它的结果
-  // 交给会话会让"配置没变"也变成"配置变了" —— 每次热重载每个会话都换一次
-  // `conv.config`，而 `ConversationState` 的注释里明确依赖"同一个引用、就地有效"。
-  // 这里按 `effectiveConfig` 的**引用**做键：它没变，状态机配置就不该变。
-  const stateConfigCache = new Map();
-  const resolveStateConfig = (convKey) => {
-    const base = effectiveConfig(convKey);
-    const hit = stateConfigCache.get(convKey);
-    if (hit && hit.base === base) return hit.out;
-    const out = stateConfig(base.chatlog);
-    stateConfigCache.set(convKey, { base, out });
-    return out;
-  };
+  // 消费者只持有**取值函数**、不持有对象：热重载不需要"推送"，也就不存在
+  // "就地 Object.assign 还是换引用"那条隐式契约（见 config/facade.js 文件头）。
+  const config = new ConfigFacade({ store, sessions });
+  const effectiveConfig = (convKey) => config.effective(convKey);
+  const resolveStateConfig = (convKey) => config.state(convKey);
 
   //锁
   let lock = null;
@@ -390,10 +382,10 @@ async function main() {
   // #region 状态机（人格卡 + 会话注册表）
 
   const registry = new ConversationRegistry({
-    ownerQq: bootConfig.owner.qq,
-    config: stateConfig(bootConfig.chatlog),
+    // 身份与状态机配置**每次现取**：热重载后新老会话一视同仁。
+    getOwnerQq: () => config.ownerQq(),
+    getConfig: () => config.state(),
     // **会话覆盖层**：`chatlog.*` 也可以按会话覆盖（闸门、上下文条数、窗口时长…）。
-    // 没配覆盖的会话拿到的是同一个对象（`SessionOverrides.resolve` 的 identity 保证）。
     resolveConfig: resolveStateConfig,
     storeFor,
     logger,
@@ -496,15 +488,11 @@ async function main() {
   }, 10 * 60 * 1000);
   mediaSweep.unref?.();
 
-  const allowView = {
-    private: [...bootConfig.allow.private],
-    groups: [...bootConfig.allow.groups],
-    allowAllWhenEmpty: bootConfig.allow.allowAllWhenEmpty,
-  };
+
 
   const bridgeApi = new BridgeApi({
     storeFor,
-    allow: allowView,
+    getAllow: () => config.allow(),
     logger,
     media: mediaStore,
     // 唯一的凭据：同机进程（dsh 里的 qq-dsh-tools 插件）读同一个文件当令牌。
@@ -605,8 +593,8 @@ async function main() {
   attachOneBotEvents(ws, {
     registry,
     // 不传主人 QQ：身份判定在状态机里按 `registry.ownerQq` 现读（传快照会静默失效）。
-    // `allow` 传的是与出站共用的那个对象 —— 热重载就地改它，两把闸门同时生效。
-    allow: allowView,
+    // 白名单给的是**取值函数**：入站与出站都从门面现取同一份冻结快照。
+    getAllow: () => config.allow(),
     // 只传它真正用到的三个（registry / allow / logger）：
     // 引用已改为**只在本地解析**，所以 `storeFor` / `http` 也不再需要
     // （见 dispatch.js 的接收段）。
@@ -726,45 +714,48 @@ async function main() {
     }
   };
 
-  store.on('change', ({ config, reason }) => {
+  // ── 配置热重载：**一个**入口，不再区分"主配置变"和"覆盖层变"
+  //
+  // 两个来源都归到同一个回调里做同一件事（幂等）：
+  //   logger.applyConfig → logEffectiveConfig → applyLiveConfig → reconcileRoles
+  //
+  // 以前是两个 handler 各抄一遍，还得在注释里解释"主配置没变也要重跑一遍"，
+  // 并且控制台保存要用 `force: true` 去补"内存已经改过、事件判定没变"的缺口。
+  // 现在门面按 revision 记忆，谁来取都是新快照，不存在"推早了/推晚了"。
+  config.subscribe(({ kind, reason }) => {
+    const base = config.base();
     try {
-      logger.info('配置已热重载', { reason, revision: store.revision });
-      logger.applyConfig(config);
-      logEffectiveConfig(logger, config, { onReload: true });
-      applyLiveConfig({ onebot: { http, ws }, registry, allow: allowView }, config, logger);
+      logger.info(kind === 'sessions' ? '会话覆盖已热重载' : '配置已热重载', {
+        reason,
+        revision: config.revision,
+        configRevision: store.revision,
+        sessionsRevision: sessions.revision,
+        sessionsCount: sessions.count,
+        wildcard: Boolean(sessions.wildcard),
+      });
+      logger.applyConfig(base);
+      logEffectiveConfig(logger, base, { onReload: true });
+      applyLiveConfig({ onebot: { http, ws } }, base, logger);
 
-      const nextRole = String(config.role?.current ?? '');
+      const nextRole = String(base.role?.current ?? '');
       if (nextRole !== lastRole) {
         logger.info('全局角色已切换', { from: lastRole || '(无)', to: nextRole || '(无)' });
         lastRole = nextRole;
       }
-      // 全局角色变了（或某会话的覆盖改了）→ 逐会话对账。
-      reconcileRoles('config-change');
+      // 全局角色变了、或某会话的覆盖改了 → 逐会话对账（判据是逐会话的 nameFor）。
+      reconcileRoles(kind === 'sessions' ? 'sessions-change' : 'config-change');
+
+      if (kind === 'sessions') {
+        const masked = sessions.maskedEnvKeys();
+        if (masked.length) {
+          logger.warn('会话覆盖压过了环境变量/命令行项（会话级更具体，按设计优先）', { pairs: masked.join(', ') });
+        }
+      }
     } catch (error) {
-      logger.error('应用热重载配置失败（可能只应用了一部分；下次保存会重跑全部小节）', {
+      logger.error('应用热重载配置失败（可能只应用了一部分；下次保存会重跑全部）', {
         reason,
         error: error?.stack ?? String(error),
       });
-    }
-  });
-
-  // 会话覆盖层单独变化（改 `config.sessions.json` / 控制台保存某个会话）。
-  //
-  // 主配置没变也要重跑一遍 `applyLiveConfig`：闸门与上下文条数都在状态机配置里，
-  // 而每个会话的配置是**从覆盖层解析出来的**（见 registry.resolveFor）。
-  store.on('sessions-change', ({ sessions: next, reason }) => {
-    try {
-      logger.info('会话覆盖已热重载', {
-        reason, revision: next.revision, count: next.count, wildcard: Boolean(next.wildcard),
-      });
-      applyLiveConfig({ onebot: { http, ws }, registry, allow: allowView }, store.get(), logger);
-      reconcileRoles('sessions-change');
-      const masked = next.maskedEnvKeys();
-      if (masked.length) {
-        logger.warn('会话覆盖压过了环境变量/命令行项（会话级更具体，按设计优先）', { pairs: masked.join(', ') });
-      }
-    } catch (error) {
-      logger.error('应用会话覆盖失败', { reason, error: error?.stack ?? String(error) });
     }
   });
 
